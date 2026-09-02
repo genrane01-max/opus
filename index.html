@@ -258,3 +258,62 @@ window.loadMessages = function(path) {
     );
 };
 
+function watchUnreadDMs() {
+  onValue(ref(db, `unreadDMs/${myId}`), (snap) => {
+    unreadFriends = [];
+    let totalUnread = 0;
+    const currentUnreads = [];
+
+    if (snap.exists()) {
+      snap.forEach(child => {
+        if (child.val() === true) {
+          const friendId = child.key;
+          currentUnreads.push(friendId);
+          unreadFriends.push(friendId);
+          totalUnread++;
+
+          // 🚀 หากมีข้อความ DM เด้งมาจากคู่สายอื่นที่เราไม่ได้จ้องหน้าต่างแชทอยู่ ยิงเตือน Toast ลอยฟ้าทันที!
+          if (!isFirstUnreadLoad && !window.previousUnreadDMs.includes(friendId)) {
+            const sender = (window.onlineUsersCache && window.onlineUsersCache[friendId]) || {};
+            const senderName = sender.name || "เพื่อน";
+            const photos = sanitizePhotos(sender.photos);
+            const validPhotos = photos.filter(p => p !== null && p !== "" && p !== "null");
+            const senderAvatar = sender.avatar || (validPhotos.length > 0 ? validPhotos["0"] : "https://img5.pic.in.th/file/secure-sv1/avatar-placeholder.png");
+
+            window.showInAppToast(
+              `✉️ มีแชทส่วนตัวส่งเข้ามาใหม่ค๊า`,
+              `คุณ ${senderName} ทักหาคุณ (แตะเพื่อคุยด่วน)`,
+              senderAvatar,
+              () => {
+                window.startDirectChat(friendId, senderName);
+              }
+            );
+          }
+        }
+      });
+    }
+
+    window.previousUnreadDMs = currentUnreads;
+    isFirstUnreadLoad = false;
+
+    const badge = document.getElementById("profileUnreadBadge");
+    if (badge) {
+      badge.style.display = totalUnread > 0 ? "inline-block" : "none";
+    }
+  });
+}
+window.logout = function() {
+window.showAppModal("🚪 ยืนยันออกจากระบบ", "คุณต้องการออกจากระบบและล้างตำแหน่งพิกัดเพื่อความเป็นส่วนตัวไหม?", "confirm", async (agreed) => {
+if (agreed) {
+try {
+await remove(ref(db, `locations/${myId}`));
+await remove(ref(db, `onlineUsers/${myId}/lastActive`));
+} catch (e) {
+console.error("Firebase cleanup on logout failed:", e);
+}
+await signOut(auth);
+location.reload();
+}
+});
+};
+
