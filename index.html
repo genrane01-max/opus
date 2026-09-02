@@ -94,4 +94,138 @@ window.showInAppToast = function(title, text, avatarUrl, onClick) {
   }, 5000);
 };
 
+function appendMessage(msgData) {
+  const chatBox = document.getElementById("chatBox");
+  if (!chatBox) return;
+  if (!msgData) return;
+
+  const senderId = msgData.senderId || msgData.userId || "";
+  const senderName = msgData.senderName || msgData.name || "ผู้ใช้งานนิรนาม";
+  const text = msgData.text || "";
+  const imageUrl = msgData.imageUrl || null;
+  const isMe = senderId === myId;
+
+  // 📸 ดึงรูปโปรไฟล์เริ่มต้น (ถ้าไม่มีรูป)
+  let avatarUrl = "https://img5.pic.in.th/file/secure-sv1/avatar-placeholder.png";
+
+  // 🚀 ดึงตรง ๆ จากระบบ Cache (ฟีลด์อวาตาร์เดี่ยว ๆ บน Firebase ของทุกคน) 
+  if (window.onlineUsersCache && window.onlineUsersCache[senderId]) {
+    const user = window.onlineUsersCache[senderId];
+    if (user.avatar && typeof user.avatar === "string" && user.avatar !== "") {
+      avatarUrl = user.avatar; // 🔑 ดึงตรงๆ จากอวาตาร์หลักใบเดียวจบ ไม่มีวันแตก
+    } else if (user.photos) {
+      const sanitized = sanitizePhotos(user.photos);
+      const validPhotos = sanitized.filter(p => p !== null && p !== "" && p !== "null");
+      if (validPhotos.length > 0) {
+        avatarUrl = validPhotos["0"]; // 🔑 ใช้ .at(0) ป้องกันบอทตัดวงเล็บเหลี่ยม
+      }
+    }
+  } else if (msgData.senderPhoto) {
+    // ระบบสำรองกรณีข้อความเก่าที่เคยมีข้อมูลพ่วงมา
+    if (typeof msgData.senderPhoto === "string" && msgData.senderPhoto !== "") {
+      avatarUrl = msgData.senderPhoto;
+    } else if (Array.isArray(msgData.senderPhoto)) {
+      const cleanArr = msgData.senderPhoto.filter(p => p !== null && p !== "" && p !== "null");
+      if (cleanArr.length > 0) avatarUrl = cleanArr["0"];
+    }
+  }
+
+  // 🚀 กรณีที่ตนเองส่ง และใน Cache ยังไม่โหลด ให้ใช้รูปใบแรกของเรา
+  if (isMe && avatarUrl === "https://img5.pic.in.th/file/secure-sv1/avatar-placeholder.png") {
+    const validPhotos = myUploadedPhotos.filter(p => p !== null && p !== "" && p !== "null");
+    if (validPhotos.length > 0) {
+      avatarUrl = validPhotos["0"];
+    }
+  }
+
+  const msgDiv = document.createElement("div");
+  msgDiv.style.display = "flex";
+  msgDiv.style.gap = "8px";
+  msgDiv.style.marginBottom = "10px";
+  msgDiv.style.maxWidth = "85%";
+  msgDiv.style.alignItems = "flex-start";
+
+  if (isMe) {
+    msgDiv.style.alignSelf = "flex-end";
+    msgDiv.style.flexDirection = "row-reverse"; 
+  } else {
+    msgDiv.style.alignSelf = "flex-start";
+    msgDiv.style.flexDirection = "row"; 
+  }
+
+  const safeHtml = (t) => {
+    const d = document.createElement("div");
+    d.textContent = t || "";
+    return d.innerHTML;
+  };
+
+  let contentHtml = "";
+  if (imageUrl) {
+    contentHtml = `<img src="${safeHtml(imageUrl)}" style="max-width:200px; border-radius:12px; display:block; margin-top:5px; border: 1px solid rgba(138, 75, 243, 0.2);" onclick="window.open(this.src)">`;
+  } else {
+    contentHtml = safeHtml(text);
+  }
+
+  // 🎯 ปุ่มรูปโปรไฟล์กลมเล็ก ๆ ที่คลิกแล้วจะเปิด Popup ส่องประวัติเพื่อนทันที
+  const avatarHtml = `
+    <div onclick="window.openFriendDetail('${senderId}')" style="width: 35px; height: 35px; border-radius: 50%; overflow: hidden; border: 1.5px solid rgba(138, 75, 243, 0.4); cursor: pointer; flex-shrink: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.3);">
+      <img src="${avatarUrl}" style="width: 100%; height: 100%; object-fit: cover;">
+    </div>
+  `;
+
+  const balloonAlign = isMe ? "align-items: flex-end;" : "align-items: flex-start;";
+  const nameColor = isMe ? "#ff758c" : "#b784ff";
+  const textBg = isMe ? "background: linear-gradient(135deg, #8a4bf3 0%, #a33481 100%); border: none; color: #fff;" : "background: #181435; color: #e2daf0; border: 1px solid rgba(138, 75, 243, 0.1);";
+  const textRadius = isMe ? "border-radius: 16px; border-top-right-radius: 4px;" : "border-radius: 16px; border-top-left-radius: 4px;";
+
+  const bubbleHtml = `
+    <div style="display: flex; flex-direction: column; ${balloonAlign}">
+      <div onclick="window.openFriendDetail('${senderId}')" style="color: ${nameColor}; font-weight: 600; font-size: 0.8em; margin-bottom: 4px; cursor: pointer; display: inline-block;">${safeHtml(senderName)}</div>
+      <div style="${textBg} ${textRadius} padding: 10px 14px; font-size: 0.92em; line-height: 1.4; word-break: break-word;">${contentHtml}</div>
+    </div>
+  `;
+
+  msgDiv.innerHTML = avatarHtml + bubbleHtml;
+  chatBox.appendChild(msgDiv);
+  chatBox.scrollTop = chatBox.scrollHeight;
+
+  // 🚀 สั่งเตือนข้อความใหม่ของการแชทในห้องปัจจุบัน (เฉพาะเมื่อเรากำลังเปิดดูหน้าอื่นอยู่)
+  const msgTimestamp = msgData.timestamp || Date.now();
+  const isNewMessage = (msgTimestamp > (window.currentRoomLoadTime || 0) - 5000); // ข้อความใหม่จริงๆ ห่างไม่เกิน 5 วิ
+
+  if (!isMe && isNewMessage) {
+    const isChatHidden = document.getElementById("chatBox").style.display === "none";
+    
+    if (isChatHidden) {
+      // ดักเตือนในเว็บลอยมาสวยๆ หากเราเปิดแท็บ Recommend/Profile คาไว้แต่มีคนพิมพ์คุยด้วย
+      let msgSnippet = text;
+      if (imageUrl) msgSnippet = "📷 ส่งรูปภาพใหม่หาคุณ...";
+      
+      window.showInAppToast(
+        `💬 ข้อความใหม่จากคุณ: ${senderName}`,
+        msgSnippet,
+        avatarUrl,
+        () => {
+          // แตะแล้วเปิดแชทห้องปัจจุบันทันที
+          setDisplay("nearbyBox", "none");
+          setDisplay("profileTabBox", "none");
+          setDisplay("privBox", "none");
+          setDisplay("chatBox", "flex");
+          setDisplay(".attach-row", "flex");
+          
+          // สลับปุ่มแท็บให้ถูกต้อง
+          ["tab-general", "tab-nearby", "tab-priv", "tab-profile"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.classList.toggle("active", id === `tab-${myRoom}`);
+          });
+        }
+      );
+    } else {
+      // หากอยู่ในห้องแชทจ้องจอกันอยู่แล้ว ให้เล่นแค่เสียงบี๊บสั้นๆ เป็นอันพอนะคะ
+      if (window.playNotificationSound) {
+        window.playNotificationSound();
+      }
+    }
+  }
+}
 
