@@ -1,138 +1,183 @@
-// ==================== 📞 ระบบ WEBRTC & SIGNALING ในตัวสมบูรณ์ ====================
+// ==================== 📞 ระบบ WEBRTC & SIGNALING (แก้ปัญหาจอมืด/เวลาค้าง) ====================
+// สมมติว่า db, ref, set, push, remove, onValue, onChildAdded ถูก import จาก Firebase ไว้แล้วที่ไฟล์เดิม
+
 let localStream = null;
 let peerConnection = null;
 let activeCallKey = null;
 let callTimerInterval = null;
+let connectWatchdog = null; // ⏱️ ตัวจับเวลาถ้าเชื่อมต่อไม่สำเร็จ
 let isAudioMuted = false;
 let isVideoMuted = false;
+
+// 🔧 จุดที่แก้: เปลี่ยนจาก TURN แชร์สาธารณะ (openrelayproject) มาเป็น TURN ของเอกเอง
+// จาก ExpressTurn (บัญชีฟรี 1000GB/เดือน ไม่แชร์กับใคร) — เสถียรกว่าของเดิมมาก
 const rtcConfig = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     {
-      // 🌐 เพิ่มเซิร์ฟเวอร์ช่วยส่งผ่านสัญญาณสำหรับเน็ตมือถือ (TURN Server ฟรี)
-      urls: "turn:openrelay.metered.ca:443",
-      username: "openrelayproject",
-      credential: "openrelayproject"
+      urls: "turn:free.expressturn.com:3478",
+      username: "000000002103689804",
+      credential: "6/DO+61v5dFnykwC496pa0TN0l8="
     },
     {
-      urls: "turn:openrelay.metered.ca:80",
-      username: "openrelayproject",
-      credential: "openrelayproject"
+      urls: "turn:free.expressturn.com:3478?transport=tcp",
+      username: "000000002103689804",
+      credential: "6/DO+61v5dFnykwC496pa0TN0l8="
     }
-  ]
+  ],
+  iceCandidatePoolSize: 10
 };
 
-window.__callUser = async function(friendId, friendName) {
+// 🔧 ฟังก์ชันกลางไว้ผูก event ของ peerConnection ทุกจุดที่ต้องใช้ (caller + receiver)
+function attachConnectionWatchdog(partnerLabel) {
+  // ถ้าเชื่อมต่อไม่สำเร็จภายใน 15 วิ ให้ตัดจบแทนที่จะปล่อยจอมืด/เวลาค้างค้างไว้เฉยๆ
+  connectWatchdog = setTimeout(() => {
+    if (peerConnection && peerConnection.iceConnectionState !== "connected" &&
+        peerConnection.iceConnectionState !== "completed") {
+      alert("เชื่อมต่อสายไม่สำเร็จ (เน็ตอาจไม่เสถียร หรือ TURN server มีปัญหา) กรุณาลองใหม่อีกครั้งค่ะ");
+      window.endWebRTCCall();
+    }
+  }, 15000);
+
+  peerConnection.oniceconnectionstatechange = () => {
+    if (!peerConnection) return;
+    const state = peerConnection.iceConnectionState;
+    console.log(`[WebRTC] iceConnectionState (${partnerLabel}):`, state);
+
+    if (state === "connected" || state === "completed") {
+      if (connectWatchdog) { clearTimeout(connectWatchdog); connectWatchdog = null; }
+    }
+
+    if (state === "failed" || state === "disconnected") {
+      // ลองรีสตาร์ท ICE ก่อนตัดสายทันที (เผื่อแค่สัญญาณสะดุดชั่วคราว)
+      try { peerConnection.restartIce(); } catch (e) {}
+      setTimeout(() => {
+        if (peerConnection && (peerConnection.iceConnectionState === "failed" ||
+            peerConnection.iceConnectionState === "disconnected")) {
+          alert("การเชื่อมต่อสายหลุด กรุณาโทรใหม่อีกครั้งค่ะ");
+          window.endWebRTCCall();
+        }
+      }, 6000);
+    }
+  };
+}
+
+window.__callUser = async function (friendId, friendName) {
   try {
-    window.showAppModal("⏳ เตรียมเชื่อมต่อ", "กำลังตรวจสอบสิทธิ์ and ต่อสายกล้องเสียง...", "loading");
+    window.showAppModal("⏳ เตรียมเชื่อมต่อ", "กำลังตรวจสอบสิทธิ์และต่อสายกล้องเสียง...", "loading");
     activeCallKey = `${myId}_${friendId}`;
     document.getElementById("callPartnerName").textContent = `กำลังเชื่อมต่อกับคุณ ${friendName}`;
     document.getElementById("videoCallOverlay").style.display = "flex";
     window.closeAppModal();
+
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     document.getElementById("localVideo").srcObject = localStream;
+
     peerConnection = new RTCPeerConnection(rtcConfig);
+    attachConnectionWatchdog("caller");
+
     localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
         const candRef = ref(db, `calls/signaling/${activeCallKey}/callerCandidates`);
         push(candRef, event.candidate.toJSON());
       }
     };
+
     peerConnection.ontrack = (event) => {
-      if (event.streams && event.streams.length > 0) {
-        document.getElementById("remoteVideo").srcObject = event.streams.at(0);
-      } else if (event.stream) {
-        document.getElementById("remoteVideo").srcObject = event.stream;
-      }
+      const stream = (event.streams && event.streams.length > 0) ? event.streams[0] : event.stream;
+      if (stream) document.getElementById("remoteVideo").srcObject = stream;
       startCallTimer();
-      window.playSuccessSound(); 
+      window.playSuccessSound();
     };
+
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
-    await set(ref(db, `calls/signaling/${activeCallKey}/offer`), {
-      sdp: offer.sdp,
-      type: offer.type
-    });
+
+    await set(ref(db, `calls/signaling/${activeCallKey}/offer`), { sdp: offer.sdp, type: offer.type });
+
     onValue(ref(db, `calls/signaling/${activeCallKey}/answer`), async (snap) => {
       if (snap.exists() && peerConnection && peerConnection.signalingState !== "stable") {
         const answer = snap.val();
         await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+
         onChildAdded(ref(db, `calls/signaling/${activeCallKey}/receiverCandidates`), async (candSnap) => {
           if (candSnap.exists() && peerConnection) {
-            try {
-              await peerConnection.addIceCandidate(new RTCIceCandidate(candSnap.val()));
-            } catch(e) {}
+            try { await peerConnection.addIceCandidate(new RTCIceCandidate(candSnap.val())); } catch (e) {}
           }
         });
       }
     });
+
     onValue(ref(db, `calls/signaling/${activeCallKey}/terminated`), (snap) => {
-      if (snap.exists() && snap.val() === true) {
-        cleanupWebRTCCall();
-      }
+      if (snap.exists() && snap.val() === true) cleanupWebRTCCall();
     });
+
   } catch (err) {
     alert("ขออภัยค่ะ! ไม่สามารถเชื่อมต่อสายวิดีโอได้: " + err.message);
     window.endWebRTCCall();
   }
 };
 
-window.__acceptCallNow = async function(callerId) {
+window.__acceptCallNow = async function (callerId) {
   try {
     activeCallKey = `${callerId}_${myId}`;
     document.getElementById("callPartnerName").textContent = `เชื่อมต่อท่อ WebRTC สื่อสารปลอดภัย`;
     document.getElementById("videoCallOverlay").style.display = "flex";
+
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     document.getElementById("localVideo").srcObject = localStream;
+
     peerConnection = new RTCPeerConnection(rtcConfig);
+    attachConnectionWatchdog("receiver");
+
     localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
         const candRef = ref(db, `calls/signaling/${activeCallKey}/receiverCandidates`);
         push(candRef, event.candidate.toJSON());
       }
     };
+
     peerConnection.ontrack = (event) => {
-      if (event.streams && event.streams.length > 0) {
-        document.getElementById("remoteVideo").srcObject = event.streams.at(0);
-      } else if (event.stream) {
-        document.getElementById("remoteVideo").srcObject = event.stream;
-      }
+      const stream = (event.streams && event.streams.length > 0) ? event.streams[0] : event.stream;
+      if (stream) document.getElementById("remoteVideo").srcObject = stream;
       startCallTimer();
-      window.playSuccessSound(); 
+      window.playSuccessSound();
     };
+
+    // 🔧 จุดที่แก้: เดิมมี logic unsubscribe ที่งงและอาจไม่ยกเลิกจริง (เช็ค falsy ของตัวแปรตัวเอง
+    // ก่อนจะถูก assign เสร็จ) เปลี่ยนมาใช้ flag ธรรมดาแทน กันประมวลผล offer ซ้ำ
+    let offerHandled = false;
     const offerRef = ref(db, `calls/signaling/${activeCallKey}/offer`);
-    let unsubscribeOffer;
-    unsubscribeOffer = onValue(offerRef, async (offerSnap) => {
-      if (offerSnap.exists() && peerConnection && peerConnection.signalingState === "stable") {
-        if (unsubscribeOffer) {
-          unsubscribeOffer();
-        } else {
-          setTimeout(() => { if (unsubscribeOffer) unsubscribeOffer(); }, 0);
+    const unsubscribeOffer = onValue(offerRef, async (offerSnap) => {
+      if (offerHandled || !offerSnap.exists() || !peerConnection ||
+          peerConnection.signalingState !== "stable") return;
+
+      offerHandled = true;
+      unsubscribeOffer();
+
+      const offerData = offerSnap.val();
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData));
+
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+
+      await set(ref(db, `calls/signaling/${activeCallKey}/answer`), { sdp: answer.sdp, type: answer.type });
+
+      onChildAdded(ref(db, `calls/signaling/${activeCallKey}/callerCandidates`), async (candSnap) => {
+        if (candSnap.exists() && peerConnection) {
+          try { await peerConnection.addIceCandidate(new RTCIceCandidate(candSnap.val())); } catch (e) {}
         }
-        const offerData = offerSnap.val();
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData));
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        await set(ref(db, `calls/signaling/${activeCallKey}/answer`), {
-          sdp: answer.sdp,
-          type: answer.type
-        });
-        onChildAdded(ref(db, `calls/signaling/${activeCallKey}/callerCandidates`), async (candSnap) => {
-          if (candSnap.exists() && peerConnection) {
-            try {
-              await peerConnection.addIceCandidate(new RTCIceCandidate(candSnap.val()));
-            } catch(e) {}
-          }
-        });
-      }
+      });
     });
+
     onValue(ref(db, `calls/signaling/${activeCallKey}/terminated`), (snap) => {
-      if (snap.exists() && snap.val() === true) {
-        cleanupWebRTCCall();
-      }
+      if (snap.exists() && snap.val() === true) cleanupWebRTCCall();
     });
+
   } catch (err) {
     alert("การต่อสายตอบรับมีปัญหา: " + err.message);
     window.endWebRTCCall();
@@ -140,41 +185,43 @@ window.__acceptCallNow = async function(callerId) {
 };
 
 function startCallTimer() {
-if (callTimerInterval) clearInterval(callTimerInterval);
-let seconds = 0;
-callTimerInterval = setInterval(() => {
-seconds++;
-const m = Math.floor(seconds / 60).toString().padStart(2, "0");
-const s = (seconds % 60).toString().padStart(2, "0");
-document.getElementById("callDurationTimer").textContent = `${m}:${s}`;
-}, 1000);
+  if (callTimerInterval) clearInterval(callTimerInterval);
+  let seconds = 0;
+  callTimerInterval = setInterval(() => {
+    seconds++;
+    const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+    const s = (seconds % 60).toString().padStart(2, "0");
+    document.getElementById("callDurationTimer").textContent = `${m}:${s}`;
+  }, 1000);
 }
 
-window.toggleMuteAudio = function() {
-if (localStream) {
-isAudioMuted = !isAudioMuted;
-localStream.getAudioTracks()[0].enabled = !isAudioMuted;
-document.getElementById("toggleAudioBtn").textContent = isAudioMuted ? "🔇" : "🎤";
-}
+window.toggleMuteAudio = function () {
+  if (localStream) {
+    isAudioMuted = !isAudioMuted;
+    localStream.getAudioTracks()[0].enabled = !isAudioMuted;
+    document.getElementById("toggleAudioBtn").textContent = isAudioMuted ? "🔇" : "🎤";
+  }
 };
 
-window.toggleMuteVideo = function() {
-if (localStream) {
-isVideoMuted = !isVideoMuted;
-localStream.getVideoTracks()[0].enabled = !isVideoMuted;
-document.getElementById("toggleVideoBtn").textContent = isVideoMuted ? "🙈" : "📹";
-}
+window.toggleMuteVideo = function () {
+  if (localStream) {
+    isVideoMuted = !isVideoMuted;
+    localStream.getVideoTracks()[0].enabled = !isVideoMuted;
+    document.getElementById("toggleVideoBtn").textContent = isVideoMuted ? "🙈" : "📹";
+  }
 };
 
-window.endWebRTCCall = async function() {
-if (activeCallKey) {
-await set(ref(db, `calls/signaling/${activeCallKey}/terminated`), true);
-}
-cleanupWebRTCCall();
+window.endWebRTCCall = async function () {
+  if (activeCallKey) {
+    await set(ref(db, `calls/signaling/${activeCallKey}/terminated`), true);
+  }
+  cleanupWebRTCCall();
 };
 
 function cleanupWebRTCCall() {
+  if (connectWatchdog) { clearTimeout(connectWatchdog); connectWatchdog = null; }
   if (callTimerInterval) clearInterval(callTimerInterval);
+
   if (localStream) {
     localStream.getTracks().forEach(track => track.stop());
     localStream = null;
@@ -183,6 +230,7 @@ function cleanupWebRTCCall() {
     peerConnection.close();
     peerConnection = null;
   }
+
   document.getElementById("videoCallOverlay").style.display = "none";
   document.getElementById("localVideo").srcObject = null;
   document.getElementById("remoteVideo").srcObject = null;
@@ -192,15 +240,15 @@ function cleanupWebRTCCall() {
       remove(ref(db, `calls/signaling/${activeCallKey}`));
       const parts = activeCallKey.split("_");
       remove(ref(db, `authorizedCalls/${activeCallKey}`));
-
       if (parts.length >= 2) {
-        remove(ref(db, `authorizedCalls/${parts.at(1)}_${parts.at(0)}`));
+        remove(ref(db, `authorizedCalls/${parts[1]}_${parts[0]}`));
       }
     } catch (e) {
       console.error("Firebase cleanup failed during hangup:", e);
     }
     activeCallKey = null;
   }
+
   window.stopDialingSound();
   window.stopRingtone();
 }
