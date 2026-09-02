@@ -1,0 +1,97 @@
+window.showInAppToast = function(title, text, avatarUrl, onClick) {
+  // 🔊 1. เล่นเสียงบี๊บสะกิดผู้ใช้เตือนแชทใหม่ในแอป
+  if (window.playNotificationSound) {
+    window.playNotificationSound();
+  }
+
+  // 🎨 2. สร้างโครงสร้างการ์ดสีม่วงนีออนสลัวตามธีมของแอปพร้อมปุ่ม ✕ ปิดแยกต่างหากอย่างพรีเมียม
+  const toast = document.createElement("div");
+  toast.style.cssText = `
+    position: fixed;
+    top: -100px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    max-width: 360px;
+    background: rgba(20, 16, 44, 0.95);
+    border: 1.5px solid #8a4bf3;
+    border-radius: 16px;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 8px 32px rgba(138, 75, 243, 0.4);
+    z-index: 999999;
+    cursor: pointer;
+    transition: top 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s;
+    opacity: 0;
+  `;
+
+  const defaultAvatar = "https://img5.pic.in.th/file/secure-sv1/avatar-placeholder.png";
+  const imgUrl = avatarUrl || defaultAvatar;
+
+  toast.innerHTML = `
+    <!-- รูปโปรไฟล์คู่สนทนา -->
+    <div style="width: 42px; height: 42px; border-radius: 50%; overflow: hidden; border: 1.5px solid rgba(138, 75, 243, 0.5); flex-shrink: 0;">
+      <img src="${imgUrl}" style="width: 100%; height: 100%; object-fit: cover;">
+    </div>
+    
+    <!-- ข้อความเนื้อหาแชท -->
+    <div style="flex: 1; min-width: 0; padding-right: 4px;">
+      <div style="font-weight: bold; font-size: 0.85em; color: #b784ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${title}</div>
+      <div style="font-size: 0.8em; color: #e2daf0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;">${text}</div>
+    </div>
+
+    <!-- กลุ่มคอนโทรลด้านขวาสุด -->
+    <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+      <!-- ปุ่มพิมพ์แตะคุย -->
+      <span style="color: #4ecca3; font-size: 0.75em; font-weight: bold; background: rgba(78, 204, 163, 0.1); padding: 4px 8px; border-radius: 8px;">แตะคุย 💬</span>
+      
+      <!-- ปุ่ม ✕ ปิดทิ้งแบบแยกพื้นที่กดโดยสมบูรณ์ -->
+      <button id="closeToastBtn" style="background: none; border: none; color: #ff4757; font-size: 1.3em; cursor: pointer; padding: 4px 8px; margin: 0; width: auto; font-weight: bold; outline: none; transition: transform 0.1s;">✕</button>
+    </div>
+  `;
+
+  document.body.appendChild(toast);
+
+  // ⚡ 3. สั่งให้สไลด์แอนิเมชันเลื่อนลงมาจากขอบบนจออย่างสมูท
+  setTimeout(() => {
+    toast.style.top = "20px";
+    toast.style.opacity = "1";
+  }, 50);
+
+  // 🖱️ 4. เมื่อผู้ใช้แตะบริเวณการ์ด (ที่ไม่ใช่ปุ่ม ✕) ให้สั่งเปลี่ยนหน้าห้องแชททันที
+  toast.onclick = () => {
+    dismissToast();
+    if (onClick) onClick();
+  };
+
+  // ❌ 5. ดักจับการแตะปุ่มปิด (✕) เพื่อปิดทำลายการ์ดทันที โดยไม่เปิดเข้าห้องแชท (e.stopPropagation())
+  const closeBtn = toast.querySelector("#closeToastBtn");
+  if (closeBtn) {
+    closeBtn.onclick = (e) => {
+      e.stopPropagation(); // 🚀 หยุดสัญญาณคลิกไม่ให้ไหลขึ้นไปโดนตัวการ์ดหลัก
+      dismissToast();
+    };
+  }
+
+  // ฟังก์ชันสำหรับสไลด์การ์ดเก็บและทำลายตัวเอง
+  function dismissToast() {
+    toast.style.top = "-100px";
+    toast.style.opacity = "0";
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.remove();
+      }
+    }, 400);
+  }
+
+  // ⏱️ 6. ลบการ์ดออกเองโดยอัตโนมัติหากผ่านไป 5 วินาทีแล้วไม่มีคนกด
+  setTimeout(() => {
+    if (toast.parentNode) {
+      dismissToast();
+    }
+  }, 5000);
+};
+
+
