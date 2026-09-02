@@ -1,22 +1,206 @@
-<!-- ========================================================================= -->
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged }
-from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getDatabase, ref, push, onChildAdded, onValue, set, get, update, remove, onDisconnect, serverTimestamp, query, limitToLast }
-from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+// ==================== 📞 ระบบ WEBRTC & SIGNALING ในตัวสมบูรณ์ ====================
+let localStream = null;
+let peerConnection = null;
+let activeCallKey = null;
+let callTimerInterval = null;
+let isAudioMuted = false;
+let isVideoMuted = false;
+const rtcConfig = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    {
+      // 🌐 เพิ่มเซิร์ฟเวอร์ช่วยส่งผ่านสัญญาณสำหรับเน็ตมือถือ (TURN Server ฟรี)
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    },
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    }
+  ]
+};
 
-let app, auth, db;
-let myId = "", myName = "", myRoom = "general", myAge = 18;
-let authMode = "login";
-let myUploadedPhotos = Array(9).fill(null);
-let tempUserId = "temp_" + Math.random().toString(36).slice(2, 10);
-let promptpayNumber = "0000000000";
-let activeFriendData = null;
-let activeFriendImgIndex = 0;
-let ringtoneAudio = null;
+window.__callUser = async function(friendId, friendName) {
+  try {
+    window.showAppModal("⏳ เตรียมเชื่อมต่อ", "กำลังตรวจสอบสิทธิ์ and ต่อสายกล้องเสียง...", "loading");
+    activeCallKey = `${myId}_${friendId}`;
+    document.getElementById("callPartnerName").textContent = `กำลังเชื่อมต่อกับคุณ ${friendName}`;
+    document.getElementById("videoCallOverlay").style.display = "flex";
+    window.closeAppModal();
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    document.getElementById("localVideo").srcObject = localStream;
+    peerConnection = new RTCPeerConnection(rtcConfig);
+    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        const candRef = ref(db, `calls/signaling/${activeCallKey}/callerCandidates`);
+        push(candRef, event.candidate.toJSON());
+      }
+    };
+    peerConnection.ontrack = (event) => {
+      if (event.streams && event.streams.length > 0) {
+        document.getElementById("remoteVideo").srcObject = event.streams.at(0);
+      } else if (event.stream) {
+        document.getElementById("remoteVideo").srcObject = event.stream;
+      }
+      startCallTimer();
+      window.playSuccessSound(); 
+    };
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    await set(ref(db, `calls/signaling/${activeCallKey}/offer`), {
+      sdp: offer.sdp,
+      type: offer.type
+    });
+    onValue(ref(db, `calls/signaling/${activeCallKey}/answer`), async (snap) => {
+      if (snap.exists() && peerConnection && peerConnection.signalingState !== "stable") {
+        const answer = snap.val();
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        onChildAdded(ref(db, `calls/signaling/${activeCallKey}/receiverCandidates`), async (candSnap) => {
+          if (candSnap.exists() && peerConnection) {
+            try {
+              await peerConnection.addIceCandidate(new RTCIceCandidate(candSnap.val()));
+            } catch(e) {}
+          }
+        });
+      }
+    });
+    onValue(ref(db, `calls/signaling/${activeCallKey}/terminated`), (snap) => {
+      if (snap.exists() && snap.val() === true) {
+        cleanupWebRTCCall();
+      }
+    });
+  } catch (err) {
+    alert("ขออภัยค่ะ! ไม่สามารถเชื่อมต่อสายวิดีโอได้: " + err.message);
+    window.endWebRTCCall();
+  }
+};
 
+window.__acceptCallNow = async function(callerId) {
+  try {
+    activeCallKey = `${callerId}_${myId}`;
+    document.getElementById("callPartnerName").textContent = `เชื่อมต่อท่อ WebRTC สื่อสารปลอดภัย`;
+    document.getElementById("videoCallOverlay").style.display = "flex";
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    document.getElementById("localVideo").srcObject = localStream;
+    peerConnection = new RTCPeerConnection(rtcConfig);
+    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        const candRef = ref(db, `calls/signaling/${activeCallKey}/receiverCandidates`);
+        push(candRef, event.candidate.toJSON());
+      }
+    };
+    peerConnection.ontrack = (event) => {
+      if (event.streams && event.streams.length > 0) {
+        document.getElementById("remoteVideo").srcObject = event.streams.at(0);
+      } else if (event.stream) {
+        document.getElementById("remoteVideo").srcObject = event.stream;
+      }
+      startCallTimer();
+      window.playSuccessSound(); 
+    };
+    const offerRef = ref(db, `calls/signaling/${activeCallKey}/offer`);
+    let unsubscribeOffer;
+    unsubscribeOffer = onValue(offerRef, async (offerSnap) => {
+      if (offerSnap.exists() && peerConnection && peerConnection.signalingState === "stable") {
+        if (unsubscribeOffer) {
+          unsubscribeOffer();
+        } else {
+          setTimeout(() => { if (unsubscribeOffer) unsubscribeOffer(); }, 0);
+        }
+        const offerData = offerSnap.val();
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        await set(ref(db, `calls/signaling/${activeCallKey}/answer`), {
+          sdp: answer.sdp,
+          type: answer.type
+        });
+        onChildAdded(ref(db, `calls/signaling/${activeCallKey}/callerCandidates`), async (candSnap) => {
+          if (candSnap.exists() && peerConnection) {
+            try {
+              await peerConnection.addIceCandidate(new RTCIceCandidate(candSnap.val()));
+            } catch(e) {}
+          }
+        });
+      }
+    });
+    onValue(ref(db, `calls/signaling/${activeCallKey}/terminated`), (snap) => {
+      if (snap.exists() && snap.val() === true) {
+        cleanupWebRTCCall();
+      }
+    });
+  } catch (err) {
+    alert("การต่อสายตอบรับมีปัญหา: " + err.message);
+    window.endWebRTCCall();
+  }
+};
 
+function startCallTimer() {
+if (callTimerInterval) clearInterval(callTimerInterval);
+let seconds = 0;
+callTimerInterval = setInterval(() => {
+seconds++;
+const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+const s = (seconds % 60).toString().padStart(2, "0");
+document.getElementById("callDurationTimer").textContent = `${m}:${s}`;
+}, 1000);
+}
 
+window.toggleMuteAudio = function() {
+if (localStream) {
+isAudioMuted = !isAudioMuted;
+localStream.getAudioTracks()[0].enabled = !isAudioMuted;
+document.getElementById("toggleAudioBtn").textContent = isAudioMuted ? "🔇" : "🎤";
+}
+};
 
+window.toggleMuteVideo = function() {
+if (localStream) {
+isVideoMuted = !isVideoMuted;
+localStream.getVideoTracks()[0].enabled = !isVideoMuted;
+document.getElementById("toggleVideoBtn").textContent = isVideoMuted ? "🙈" : "📹";
+}
+};
 
+window.endWebRTCCall = async function() {
+if (activeCallKey) {
+await set(ref(db, `calls/signaling/${activeCallKey}/terminated`), true);
+}
+cleanupWebRTCCall();
+};
+
+function cleanupWebRTCCall() {
+  if (callTimerInterval) clearInterval(callTimerInterval);
+  if (localStream) {
+    localStream.getTracks().forEach(track => track.stop());
+    localStream = null;
+  }
+  if (peerConnection) {
+    peerConnection.close();
+    peerConnection = null;
+  }
+  document.getElementById("videoCallOverlay").style.display = "none";
+  document.getElementById("localVideo").srcObject = null;
+  document.getElementById("remoteVideo").srcObject = null;
+
+  if (activeCallKey) {
+    try {
+      remove(ref(db, `calls/signaling/${activeCallKey}`));
+      const parts = activeCallKey.split("_");
+      remove(ref(db, `authorizedCalls/${activeCallKey}`));
+
+      if (parts.length >= 2) {
+        remove(ref(db, `authorizedCalls/${parts.at(1)}_${parts.at(0)}`));
+      }
+    } catch (e) {
+      console.error("Firebase cleanup failed during hangup:", e);
+    }
+    activeCallKey = null;
+  }
+  window.stopDialingSound();
+  window.stopRingtone();
+}
