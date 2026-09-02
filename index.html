@@ -1,0 +1,22 @@
+<!-- ========================================================================= -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getDatabase, ref, push, onChildAdded, onValue, set, get, update, remove, onDisconnect, serverTimestamp, query, limitToLast }
+from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+let app, auth, db;
+let myId = "", myName = "", myRoom = "general", myAge = 18;
+let authMode = "login";
+let myUploadedPhotos = Array(9).fill(null);
+let tempUserId = "temp_" + Math.random().toString(36).slice(2, 10);
+let promptpayNumber = "0000000000";
+let activeFriendData = null;
+let activeFriendImgIndex = 0;
+let ringtoneAudio = null;
+
+
+
+
+
