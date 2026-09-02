@@ -1,0 +1,107 @@
+
+{
+  "rules": {
+    "messages": {
+      "$room": {
+        ".read": "auth != null",
+        "$msgId": {
+          ".write": "auth != null && !data.exists()",
+          ".validate": "newData.hasChildren(['senderId', 'senderName', 'timestamp']) && newData.child('senderId').val() === auth.uid && newData.child('senderName').val().length <= 20 && (!newData.hasChild('text') || newData.child('text').val().length <= 500)"
+        }
+      }
+    },
+    "onlineUsers": {
+      ".read": "auth != null",
+      "$userId": {
+        ".write": "auth != null && (auth.uid === $userId || auth.token.email === 'admin@yourdomain.com')",
+        ".validate": "newData.hasChild('name') || auth.token.email === 'admin@yourdomain.com'"
+      }
+    },
+    "locations": {
+      ".read": "auth != null",
+      "$userId": {
+        ".write": "auth != null && (auth.uid === $userId || auth.token.email === 'admin@yourdomain.com')",
+        ".validate": "newData.hasChildren(['geohash', 'name'])"
+      }
+    },
+    "privateRooms": {
+      ".read": "auth != null",
+      "$roomName": {
+        ".read": "auth != null",
+        ".write": "auth != null && (!data.exists() || data.child('createdBy').val() === auth.uid || auth.token.email === 'admin@yourdomain.com')"
+      }
+    },
+    "calls": {
+      ".read": "auth != null",
+      "signaling": {
+        "$roomName": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        }
+      }
+    },
+    "authorizedCalls": {
+      ".read": "auth != null",
+      "$callKey": {
+        ".write": "auth != null && ($callKey.contains(auth.uid) || auth.token.email === 'admin@yourdomain.com')"
+      }
+    },
+    "pendingCallCredits": {
+      ".read": "auth != null",
+      "$receiverId": {
+        "$callerId": {
+          ".write": "auth != null && (auth.uid === $callerId || auth.uid === $receiverId || auth.token.email === 'admin@yourdomain.com')"
+        }
+      }
+    },
+    "paymentsLog": {
+      ".read": "auth != null && auth.token.email === 'admin@yourdomain.com'",
+      "$transRef": {
+        ".write": "auth != null && auth.token.email === 'admin@yourdomain.com'"
+      }
+    },
+    "usedSlips": {
+      ".read": "auth != null && auth.token.email === 'admin@yourdomain.com'",
+      "$transRef": {
+        ".write": "auth != null && auth.token.email === 'admin@yourdomain.com'"
+      }
+    },
+    "withdrawRequests": {
+      ".read": "auth != null && auth.token.email === 'admin@yourdomain.com'",
+      "$reqId": {
+        ".write": "auth != null && auth.token.email === 'admin@yourdomain.com'"
+      }
+    },
+    "reports": {
+      ".read": "auth != null && auth.token.email === 'admin@yourdomain.com'",
+      "$reportId": {
+        ".write": "auth != null && !data.exists()"
+      }
+    },
+    "friends": {
+      "$userId": {
+        ".read": "auth != null && (auth.uid === $userId || auth.token.email === 'admin@yourdomain.com')",
+        "$friendId": {
+          ".write": "auth != null && (auth.uid === $userId || auth.uid === $friendId || auth.token.email === 'admin@yourdomain.com')"
+        }
+      }
+    },
+    "friendRequests": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        "$senderId": {
+          ".write": "auth != null",
+          ".validate": "newData.hasChildren(['name', 'timestamp'])"
+        }
+      }
+    },
+    "unreadDMs": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        "$friendId": {
+          ".write": "auth != null"
+        }
+      }
+    }
+  }
+}
