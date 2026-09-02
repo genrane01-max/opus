@@ -229,3 +229,32 @@ function appendMessage(msgData) {
   }
 }
 
+window.loadMessages = function(path) {
+  window.currentRoomLoadTime = Date.now();
+    if (currentChatUnsubscribe) {
+        try { currentChatUnsubscribe(); } catch(e) {}
+        currentChatUnsubscribe = null;
+    }
+
+    const chatBox = document.getElementById("chatBox");
+    if (!chatBox) return;
+    chatBox.innerHTML = "";
+
+    const messagesQuery = query(ref(db, path), limitToLast(100));
+
+    // ตรวจหาข้อผิดพลาดและเฝ้าฟังข้อความ
+    currentChatUnsubscribe = onChildAdded(messagesQuery, 
+        (snapshot) => {
+            if (snapshot.exists()) {
+                appendMessage(snapshot.val());
+            }
+        },
+        (error) => {
+            console.error("Firebase Read Error:", error);
+            chatBox.innerHTML = `<div style="color: #ff4757; text-align: center; padding: 20px; font-size: 0.85em;">
+                ⚠️ ไม่สามารถดึงข้อความได้: ${error.message}<br>โปรดตรวจสอบกฎ Security Rules ของ Firebase
+            </div>`;
+        }
+    );
+};
+
